@@ -225,6 +225,17 @@ storyMessage = {
 storyTimeOut = null
 
 
+// ============================================
+// ANALYTICS SETUP
+// ============================================
+analytics = new AnalyticsManager()
+analytics.initialize('packabunchas')
+levelStartTime = 0
+currentLevelId = null
+levelCounter = 0
+pieceMoves = 0
+pieceRotations = 0
+
 
 /*
 ===============================================   UPDATE   ===============================================
@@ -1918,6 +1929,15 @@ function backToMenu() {
 		pieces = []
 		bag = {}
 
+		// Analytics: Track abandoned level
+		if (currentLevelId && levelStartTime > 0) {
+			var timeTaken = Date.now() - levelStartTime
+			analytics.endLevel(currentLevelId, false, timeTaken, 0)
+			analytics.addRawMetric('level_abandoned', 'true')
+			analytics.submitReport()
+			console.log('[Analytics] Level abandoned (user returned to menu)')
+		}
+
 		backButton.originalx = -500
 
 		showLoading = true
@@ -2484,6 +2504,18 @@ function generateLevel(_numberOfPolyominos, _numberOfPolyominoBlocks, _margin, _
 		toDrawPieces = true
 		GENERATING = false
 
+		// Analytics: Track level start
+		levelCounter++
+		currentLevelId = gameModes[currentGameMode].toLowerCase() + '_level_' + levelCounter
+		analytics.startLevel(currentLevelId)
+		levelStartTime = Date.now()
+		pieceMoves = 0
+		pieceRotations = 0
+		analytics.addRawMetric('game_mode', gameModes[currentGameMode])
+		analytics.addRawMetric('polyominos_count', numberOfPolyominos)
+		analytics.addRawMetric('polyominos_size', sizeOfPolyominos)
+		analytics.addRawMetric('poly_left_remaining', polyLeft)
+
 	}
 
 }
@@ -2947,6 +2979,7 @@ function mouseDown(e) {
 				if (piece.contains(mouseX, mouseY)) {
 					zzfx(...[effectVolume, , 314, .01, .01, .13, 1, 1.66, 4.9, , , , , , , , .01, .92, .05]); //Rotate
 					piece.rotate()
+					pieceRotations++
 					break //only 1 piece draggable per time
 
 				}
@@ -3002,6 +3035,7 @@ function mouseUp(e) {
 
 	if (draggedBlock != null) {
 		zzfx(...[effectVolume * 0.5, , 56, .04, .03, .01, , 1.39, 96.9, .2, -114, .16, , , , .1, , .73, .02, .08]);
+		pieceMoves++
 	}
 	lastDraggedBlock = draggedBlock
 	draggedBlock = null
@@ -3124,6 +3158,28 @@ function mouseUp(e) {
 		endCinematicState = 0
 		setMessage([""])
 		if (helpTimeout) clearTimeout(helpTimeout)
+
+		// Analytics: Track level completion
+		var timeTaken = Date.now() - levelStartTime
+		var baseXP = 100
+		var timeBonus = Math.max(0, 50 - Math.floor(timeTaken / 10000))
+		var totalXP = baseXP + timeBonus
+		
+		console.log('[Analytics] Level completed!', {
+			timeTaken: (timeTaken / 1000).toFixed(2) + 's',
+			baseXP: baseXP,
+			timeBonus: timeBonus,
+			totalXP: totalXP,
+			moves: pieceMoves,
+			rotations: pieceRotations
+		})
+		
+		analytics.endLevel(currentLevelId, true, timeTaken, totalXP)
+		analytics.addRawMetric('completion_time_seconds', (timeTaken / 1000).toFixed(2))
+		analytics.addRawMetric('piece_moves', pieceMoves)
+		analytics.addRawMetric('piece_rotations', pieceRotations)
+		analytics.addRawMetric('total_levels_completed', levelCounter)
+		analytics.submitReport()
 
 		setTimeout(function() {
 			zzfx(...[effectVolume, , 65.40639, .01, .17, .17, , 1.06, 7.9, -3.7, , , , , , , , .53, .11])
@@ -3881,6 +3937,19 @@ this.addEventListener('touchmove', touchmove, {
 this.addEventListener("focus", windowFocus, false);
 this.addEventListener("blur", windowUnfocus, false);
 
+// Analytics: Track incomplete sessions when user leaves
+window.addEventListener('beforeunload', function() {
+	if (currentLevelId && levelStartTime > 0 && gameStarted) {
+		var level = analytics._getLevelById(currentLevelId)
+		if (level && !level.successful) {
+			var timeTaken = Date.now() - levelStartTime
+			analytics.endLevel(currentLevelId, false, timeTaken, 0)
+			analytics.addRawMetric('session_ended', 'incomplete')
+			analytics.submitReport()
+			console.log('[Analytics] Session ended (incomplete)')
+		}
+	}
+})
 
 
 //createLevel()
