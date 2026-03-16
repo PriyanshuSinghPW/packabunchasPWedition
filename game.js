@@ -92,9 +92,11 @@ lerpSpeed = 0.1
 mylatesttap = 0
 bottomTextText = ""
 
+// Load polyLeft from old system first (backwards compatibility)
 polyLeft = parseInt(loadData("polyLeft", "13"))
 currentPolyTextToShow = polyLeft
 
+// Will be updated by progress system after initialization
 
 
 blockSize = w / 13
@@ -235,6 +237,111 @@ currentLevelId = null
 levelCounter = 0
 pieceMoves = 0
 pieceRotations = 0
+
+// ============================================
+// PROGRESS SYSTEM SETUP
+// ============================================
+let gameManager = null;
+let progressInitialized = false;
+
+// Initialize progress system components
+function initializeProgressSystem() {
+	console.log('[Packabunchas] Initializing progress system...');
+	
+	// Create progress bridge (for future API integration)
+	const progressBridge = new ProgressBridge({
+		apiUrl: CONFIG.api.progressUrl,
+		timeout: CONFIG.api.timeout,
+		retryAttempts: CONFIG.api.retryAttempts,
+		cacheDuration: CONFIG.api.cacheDuration,
+		useProvidedPayload: CONFIG.api.useProvidedPayload
+	});
+	
+	// Create storage manager
+	const storageManager = new StorageManager({
+		storageKey: CONFIG.storage.storageKey,
+		useAsyncStorage: CONFIG.storage.useAsyncStorage
+	});
+	
+	// Create validator
+	const validator = new Validator({
+		minLevel: CONFIG.levels.minLevel,
+		maxLevel: CONFIG.levels.maxLevel
+	});
+	
+	// Create game manager
+	gameManager = new GameManager({
+		progressBridge: progressBridge,
+		storageManager: storageManager,
+		validator: validator,
+		analyticsBridge: analytics,
+		config: CONFIG
+	});
+	
+	console.log('[Packabunchas] Progress system initialized');
+	progressInitialized = true;
+}
+
+// Initialize progress system on load
+initializeProgressSystem();
+
+// Load saved progress from GameManager
+async function loadGameProgress() {
+	if (!gameManager) {
+		console.warn('[Packabunchas] GameManager not initialized');
+		return;
+	}
+	
+	try {
+		console.log('[Packabunchas] Loading saved progress...');
+		
+		// Initialize the game manager (loads from storage)
+		const result = await gameManager.initialize();
+		
+		if (result.success) {
+			console.log('[Packabunchas] Progress loaded:', result);
+			
+			// Sync with old polyLeft system
+			// The progress system tracks total rescued, we need to calculate polyLeft
+			const totalRescued = result.startLevel || 0;
+			
+			// Determine total based on story state
+			let totalToRescue = 13;
+			const savedStoryState = parseInt(loadData("storyState", "0"));
+			
+			if (savedStoryState >= 2) {
+				// After revealing the true number
+				totalToRescue = 13312;
+			}
+			
+			// Calculate remaining
+			const calculatedPolyLeft = Math.max(0, totalToRescue - totalRescued);
+			
+			// Use the higher value between old system and progress system
+			// (for backwards compatibility)
+			const oldPolyLeft = parseInt(loadData("polyLeft", "13"));
+			
+			// If we have an old value that's different, prefer it for now
+			// This ensures backwards compatibility
+			if (oldPolyLeft !== calculatedPolyLeft && oldPolyLeft > 0) {
+				console.log('[Packabunchas] Using legacy polyLeft value:', oldPolyLeft);
+				polyLeft = oldPolyLeft;
+			} else {
+				polyLeft = calculatedPolyLeft;
+				console.log('[Packabunchas] Using calculated polyLeft:', polyLeft);
+			}
+			
+			currentPolyTextToShow = polyLeft;
+		} else {
+			console.log('[Packabunchas] Using default progress');
+		}
+	} catch (error) {
+		console.error('[Packabunchas] Error loading progress:', error);
+	}
+}
+
+// Load progress asynchronously
+loadGameProgress();
 
 
 /*
@@ -3180,6 +3287,28 @@ function mouseUp(e) {
 		analytics.addRawMetric('piece_rotations', pieceRotations)
 		analytics.addRawMetric('total_levels_completed', levelCounter)
 		analytics.submitReport()
+		
+		// Progress System: Track level completion
+		if (gameManager && progressInitialized) {
+			// Calculate how many polyominos were rescued this level
+			var polyominosRescued = numberOfPolyominos;
+			var totalRescued = 13312 - polyLeft + polyominosRescued; // Total rescued so far
+			
+			gameManager.handleLevelComplete(totalRescued, {
+				xpEarned: totalXP,
+				timeTaken: timeTaken,
+				moves: pieceMoves,
+				rotations: pieceRotations
+			}).then(function(success) {
+				if (success) {
+					console.log('[Progress] Level progress saved successfully');
+				} else {
+					console.warn('[Progress] Failed to save level progress');
+				}
+			}).catch(function(error) {
+				console.error('[Progress] Error saving progress:', error);
+			});
+		}
 
 		setTimeout(function() {
 			zzfx(...[effectVolume, , 65.40639, .01, .17, .17, , 1.06, 7.9, -3.7, , , , , , , , .53, .11])
